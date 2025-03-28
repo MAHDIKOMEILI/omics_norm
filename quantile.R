@@ -255,5 +255,5 @@ ggplot(df_long_adj, aes(x = Expression, color = source)) +
 ##############Optional Save Results#############
 ################################################
         
-write_tsv(df_to_save, "goi_quantile_normalized_data.tsv")
+write_tsv(merged_counts_final_adj, "quantile_normalized_data.tsv")
 
