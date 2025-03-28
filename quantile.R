@@ -230,10 +230,10 @@ genes_of_interest <- c("DEPDC1", "DRC3", "GTSE1", "NEMP1",
 
 # Subset the columns you want to include in the output
 # (Here, we keep sampleID, source, and the 8 genes.)
-df_to_save <- merged_counts_final_adj %>%
+df_to_save <- merged_counts_final_fullnorm %>%
   dplyr::select(sampleID, source, all_of(genes_of_interest))
 
-df_long_adj <- merged_counts_final_adj %>%
+df_long_adj <- merged_counts_final_fullnorm %>%
   dplyr::select(sampleID, source, all_of(genes_of_interest)) %>%
   pivot_longer(
     cols = all_of(genes_of_interest),
@@ -256,5 +256,5 @@ ggplot(df_long_adj, aes(x = Expression, color = source)) +
 ##############Optional Save Results#############
 ################################################
         
-write_tsv(merged_counts_final_adj, "quantile_normalized_data.tsv")
+write_tsv(merged_counts_final_fullnorm, "quantile_normalized_data.tsv")
 
