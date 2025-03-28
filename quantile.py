@@ -109,19 +109,20 @@ non_metabric_sources = unique_sources[unique_sources != "metabric"]
 
 n_samples, n_genes = X.shape
 
+# Apply quantile normalization for each non-metabric source and each gene
 for src in non_metabric_sources:
     print("Adjusting dataset:", src)
     # Find indices of samples with the current source
     target_idx = np.where(sources == src)[0]
-    # Loop over each gene (column in X)
     for gene in range(n_genes):
         # Get target gene values and reference (metabric) values as floats
         target_vals = X_fullnorm[target_idx, gene].astype(float)
         ref_vals = X_fullnorm[metabric_idx, gene].astype(float)
         
-        # Warn if there are any missing values (optional)
+        # If there are any NA values, skip processing this gene
         if np.any(np.isnan(target_vals)) or np.any(np.isnan(ref_vals)):
-            print(f"Warning: Gene {gene} in dataset {src} contains NA values.")
+            print(f"Warning: Gene {gene} in dataset {src} contains NA values. Skipping normalization for this gene.")
+            continue
         
         # Adjust the target values using the custom quantile normalization function
         adjusted_vals = adjust_gene(target_vals, ref_vals, nquantiles=10)
