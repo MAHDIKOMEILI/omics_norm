@@ -1,260 +1,369 @@
-#######################################
-###########Load Libraries##############
-#######################################
+#########################
+#######Libraries#########
+#########################
 
 library(dplyr)
-library(ggplot2)
 library(readr)
-###########################################################
-############prepare dataframes for pipeline################
-###########################################################
 
-# Make a copy of merged_counts_final to prevent overwriting it
-merged_counts_final_fullnorm <- merged_counts_final
 
-non_gene_cols <- c("sampleID", "source")  # plus any other columns you want to exclude
-all_genes <- setdiff(colnames(merged_counts_final_fullnorm), non_gene_cols)
+#############################
+#######set directory#########
+#############################
 
-metabric_data <- merged_counts_final_fullnorm[merged_counts_final_fullnorm$source == "metabric", ]
+# Set your directory path
+data_dir <- "~/er_positive/MAS5"
 
-#######################################
-#######Helper function adjust##########
-#######################################
+# List all CSV files in the directory
+files <- list.files(data_dir, pattern = "\\.tsv$", full.names = TRUE)
 
-adjust_gene <- function(target_values, ref_values, nquantiles = 10) {
-  probs <- seq(0, 1, length.out = nquantiles + 1)
-  breaks_target <- quantile(target_values, probs = probs, na.rm = TRUE)
-  breaks_ref    <- quantile(ref_values,    probs = probs, na.rm = TRUE)
+###########################################
+#########Separate clin and counts##########
+###########################################
+
+for (file in files) {
+  # 1. Get a short name for new data frames
+  var_name <- tools::file_path_sans_ext(basename(file))
   
-  adjusted <- target_values
+  # 2. Read the TSV
+  dataset <- read.delim(file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
   
-  for (i in 1:nquantiles) {
-    if (i < nquantiles) {
-      idx <- which(target_values >= breaks_target[i] & target_values < breaks_target[i + 1])
-      idx_ref <- which(ref_values    >= breaks_ref[i]    & ref_values    < breaks_ref[i + 1])
-    } else {
-      idx <- which(target_values >= breaks_target[i] & target_values <= breaks_target[i + 1])
-      idx_ref <- which(ref_values    >= breaks_ref[i]    & ref_values    <= breaks_ref[i + 1])
-    }
-    
-    if (length(idx) > 0) {
-      mean_target <- mean(target_values[idx], na.rm = TRUE)
-      mean_ref <- if (length(idx_ref) == 0) {
-        mean(ref_values, na.rm = TRUE)
-      } else {
-        mean(ref_values[idx_ref], na.rm = TRUE)
-      }
-      if (mean_target == 0) mean_target <- 1e-6
-      adjusted[idx] <- target_values[idx] / mean_target * mean_ref
-    }
+  # 3. Identify all columns that start with "clin_"
+  clin_cols <- grep("^clin_", colnames(dataset), value = TRUE)
+  
+  # 4. Create the clinical subset: these are the columns that start with "clin_"
+  #    (this includes "clin_sample_name" automatically, if it exists)
+  dataset_clin <- dataset[, clin_cols, drop = FALSE]
+  
+  # 5. Create the counts subset: everything that doesn't start with "clin_"
+  #    BUT we also force "clin_sample_name" to stay in the counts so we can track sample IDs
+  non_clin_cols <- setdiff(colnames(dataset), clin_cols)
+  
+  # Force "clin_sample_name" into the counts subset if it exists in the data
+  if ("clin_sample_name" %in% colnames(dataset)) {
+    non_clin_cols <- union("clin_sample_name", non_clin_cols)
   }
-  return(adjusted)
+  
+  rm(dataset,dataset_clin,dataset_counts,metabric_clin,metabric_counts)
+  
+  dataset_counts <- dataset[, non_clin_cols, drop = FALSE]
+  
+  # 6. Assign the subsets to variables named <fileName>_clin and <fileName>_counts
+  assign(paste0(var_name, "_clin"), dataset_clin)
+  assign(paste0(var_name, "_counts"), dataset_counts)
 }
 
-####################################
-#######Define target datasets#######
-####################################
-
-# Identify the non-reference sources
-non_metabric_sources <- setdiff(unique(merged_counts_final_fullnorm$source), "metabric")
-
-########################################################
-####################Normalisation Loop##################
-########################################################
-
-for (src in non_metabric_sources) {
-  cat("Adjusting dataset:", src, "\n")
-  
-  # Indices for samples in this source
-  target_idx <- which(merged_counts_final_fullnorm$source == src)
-  
-  for (gene in all_genes) {
-    # Get target (non-metabric) values
-    target_vals <- as.numeric(merged_counts_final_fullnorm[target_idx, gene])
-    # Get reference (metabric) values
-    ref_vals <- as.numeric(metabric_data[[gene]])
-    
-    # If there are NA values in either set, skip normalization for this gene
-    if (any(is.na(target_vals)) || any(is.na(ref_vals))) {
-      cat("Warning: Column", gene, "in dataset", src, "contains NA values. Skipping normalization for this gene.\n")
-      next  # Skip to the next gene
-    }
-    
-    # Adjust the target values using the custom quantile normalization function
-    adjusted_vals <- adjust_gene(target_vals, ref_vals, nquantiles = 10)
-    
-    # Store the adjusted values back in the new object
-    merged_counts_final_fullnorm[target_idx, gene] <- adjusted_vals
+# Loop over objects in the global environment with names ending in _clin or _counts
+for (obj_name in ls(pattern = "(_clin$|_counts$)")) {
+  obj <- get(obj_name)
+  # Check if the object is a data frame and has the target column
+  if (is.data.frame(obj) && "clin_sample_name" %in% colnames(obj)) {
+    colnames(obj)[colnames(obj) == "clin_sample_name"] <- "sampleID"
+    assign(obj_name, obj)  # Update the object in the workspace
   }
 }
 
-#####################################################
-##################PCAPLOT unnormalised###############
-#####################################################
+###################################################
+##############MAS MERGED COUNTS####################
+###################################################
 
-# --- STEP 1: Define which columns represent gene expression
-# Assume merged_counts_final has columns like sampleID, source, and gene expression columns.
-non_gene_cols <- c("sampleID", "source")
-gene_cols <- setdiff(colnames(merged_counts_final), non_gene_cols)
+# Exclude metabric_counts from the counts data frames:
+counts_names <- setdiff(ls(pattern = "_counts$"), "metabric_counts")
+counts_list <- mget(counts_names)
 
-# --- STEP 2: Split the data into metabric and non-metabric subsets
-metabric_data <- merged_counts_final %>%
-  filter(source == "metabric") %>%
-  select(all_of(gene_cols))
+# Coerce each object to a data frame (if it isn't already)
+counts_list <- lapply(counts_list, function(x) {
+  if (!is.data.frame(x)) as.data.frame(x) else x
+})
 
-non_metabric_data <- merged_counts_final %>%
-  filter(source != "metabric") %>%
-  select(all_of(gene_cols))
+# Identify common columns (features) across these counts data frames
+common_features <- Reduce(intersect, lapply(counts_list, colnames))
+print(common_features)  # Check which features are common
 
-# --- STEP 3: Identify gene columns that have complete (non-NA) data in BOTH groups
-# For metabric samples, get the names of genes with no NA values:
-complete_met_genes <- colnames(metabric_data)[apply(metabric_data, 2, function(x) all(!is.na(x)))]
-# For non-metabric samples, do the same:
-complete_non_met_genes <- colnames(non_metabric_data)[apply(non_metabric_data, 2, function(x) all(!is.na(x)))]
-# Take the intersection of these gene sets:
-common_expr_cols <- intersect(complete_met_genes, complete_non_met_genes)
-cat("Number of gene columns common (complete) in both groups:", length(common_expr_cols), "\n")
+# Subset each counts data frame to include only the common columns
+counts_list_subset <- lapply(counts_list, function(df) {
+  df <- as.data.frame(df)  # ensure df is a data frame
+  df[, common_features, drop = FALSE]
+})
 
-# --- STEP 4: Create a data frame for PCA using the intersection of complete gene columns
-# We keep sampleID and source columns from the original data.
-df_for_pca <- merged_counts_final %>%
-  select(sampleID, source, all_of(common_expr_cols))
+# Merge the counts data frames by row-binding them together and store in mas_merged_counts
+mas_merged_counts <- do.call(rbind, counts_list_subset)
 
-# --- STEP 5: Convert the expression portion to a numeric matrix
-# We assume that after removing sampleID and source, the rest are expression values.
-expr_matrix <- as.data.frame(lapply(df_for_pca %>% select(-sampleID, -source), as.numeric))
-rownames(expr_matrix) <- df_for_pca$sampleID
+# Set the 'clin_sample_name' column as row names
+rownames(mas_merged_counts) <- mas_merged_counts$sampleID
 
-# --- STEP 6: Run PCA on the intersection expression matrix
-pca_result <- prcomp(expr_matrix, center = TRUE, scale. = TRUE)
+# (Optional) Verify the row names
+head(rownames(mas_merged_counts))
 
-# --- STEP 7: Create a plotting data frame with the PCA results
-pca_df <- data.frame(
-  sampleID = df_for_pca$sampleID,
-  source = df_for_pca$source,
-  PC1 = pca_result$x[, 1],
-  PC2 = pca_result$x[, 2]
+
+####################################################
+###################METABRIC#########################
+####################################################
+
+clinical_cols <- c("X.Patient.Identifier", "ER.status.measured.by.IHC", "HER2.status.measured.by.SNP6", "Sex", "Age.at.Diagnosis", "Overall.Survival..Months.", "Overall.Survival.Status", "Patient.s.Vital.Status", "DFS", "Event")
+
+# Path to your metabric file
+file_path <- "~/er_positive/MAS5/metabric.tsv"
+
+# Read the data
+metabric_data <- read.csv(file_path, header = TRUE, stringsAsFactors = FALSE)
+
+
+# 3) Subset the clinical data
+metabric_clin <- metabric_data[, clinical_cols, drop = FALSE]
+
+# 4) Subset the counts data: all columns not listed as clinical.
+#    But if you want to keep the sampleID column in the counts data as well, force it in.
+counts_cols <- setdiff(colnames(metabric_data), clinical_cols)
+if ("X.Patient.Identifier" %in% colnames(metabric_data)) {
+  counts_cols <- union("X.Patient.Identifier", counts_cols)
+}
+metabric_counts <- metabric_data[, counts_cols, drop = FALSE]
+
+# 5) (Optional) Set the sampleID column as the row names for the counts data,
+#    while still keeping the sampleID column in the data frame.
+if ("X.Patient.Identifier" %in% colnames(metabric_counts)) {
+  rownames(metabric_counts) <- metabric_counts$X.Patient.Identifier
+  # If you later decide to remove the column, uncomment the next line:
+  # metabric_counts$sampleID <- NULL
+}
+
+# Now you have:
+#   - metabric_clin: containing the clinical information columns
+#   - metabric_counts: containing the counts data plus the sampleID column
+
+colnames(metabric_counts)
+
+# Define the names of the columns you want to remove
+remove_cols <- c("Lymph.nodes.examined.positive", "Nottingham.prognostic.index", "Cellularity", "Chemotherapy", "Cohort", "Hormone.Therapy", "Inferred.Menopausal.State", "Integrative.Cluster", "Pam50...Claudin.low.subtype", "X3.Gene.classifier.subtype", "Primary.Tumor.Laterality", "Radio.Therapy", "Tumor.Other.Histologic.Subtype", "Type.of.Breast.Surgery")  # Replace with your actual column names
+
+# Subset metabric_counts to exclude these columns
+metabric_counts <- metabric_counts[, !(colnames(metabric_counts) %in% remove_cols)]
+
+colnames(metabric_counts)[colnames(metabric_counts) == "X.Patient.Identifier"] <- "sampleID"
+colnames(metabric_clin)[colnames(metabric_clin) == "X.Patient.Identifier"] <- "sampleID"
+
+##############################
+######Merge counts data#######
+##############################
+
+# ---------- Step 1: Intersection Merge ----------
+
+# Compute common (intersecting) columns between mas_merged_counts and metabric_counts
+
+common_features_final <- intersect(colnames(mas_merged_counts), colnames(metabric_counts))
+
+# Create an intersection merge: subset each object to the common columns, then row-bind
+
+merged_counts_intersect <- rbind(
+  mas_merged_counts[, common_features_final, drop = FALSE],
+  metabric_counts[, common_features_final, drop = FALSE]
 )
 
-# --- STEP 8: Plot the PCA
-ggplot(pca_df, aes(x = PC1, y = PC2, color = source)) +
-  geom_point(alpha = 0.7) +
-  theme_bw() +
-  labs(
-    title = "PCA Plot Using Intersection of Complete Gene Columns",
-    x = "PC1",
-    y = "PC2"
-  )
-                                                            
-############################################################                                                 
-######################PCA PLOT normalised###################
-############################################################
-                                                            
-# --- STEP 1: Identify Gene Columns in Normalized Data ---
+# ---------- Step 2: Identify Extra (Uncommon) Columns ----------
 
-# Specify columns that are not gene expression (identifiers, etc.)
-non_gene_cols <- c("sampleID", "source")
+# Extra columns present in mas_merged_counts but not in the common set
 
-# Gene columns: all columns except the non-gene ones
-gene_cols <- setdiff(colnames(merged_counts_final_fullnorm), non_gene_cols)
+extra_mas <- setdiff(colnames(mas_merged_counts), common_features_final)
 
-# --- STEP 2: Split Normalized Data into Metabric and Non-Metabric Subsets ---
+# Extra columns present in metabric_counts but not in the common set
 
-metabric_data_norm <- merged_counts_final_fullnorm %>%
-  filter(source == "metabric") %>%
-  select(all_of(gene_cols))
+extra_met <- setdiff(colnames(metabric_counts), common_features_final)
 
-non_metabric_data_norm <- merged_counts_final_fullnorm %>%
-  filter(source != "metabric") %>%
-  select(all_of(gene_cols))
+# The union of extra columns from both datasets
 
-# --- STEP 3: Find the Intersection of Complete Gene Columns ---
+extra_all <- union(extra_mas, extra_met)
 
-# Identify gene columns with no NA values in metabric data
-complete_met_genes_norm <- colnames(metabric_data_norm)[
-  apply(metabric_data_norm, 2, function(x) all(!is.na(x)))
-]
+"KIAA0101" %in% extra_all
 
-# Identify gene columns with no NA values in non-metabric data
-complete_non_met_genes_norm <- colnames(non_metabric_data_norm)[
-  apply(non_metabric_data_norm, 2, function(x) all(!is.na(x)))
-]
+# ---------- Step 3: Patch Extra Columns into the Merged Data ----------
 
-# Take the intersection of these two sets:
-common_expr_cols_norm <- intersect(complete_met_genes_norm, complete_non_met_genes_norm)
-cat("Number of complete gene columns in normalized data:", length(common_expr_cols_norm), "\n")
+# Add each extra column to the merged_counts_intersect object, initializing with NA
 
-# --- STEP 4: Prepare Data for PCA ---
+for (col in extra_all) {
+  merged_counts_intersect[[col]] <- NA
+}
 
-# Create a data frame for PCA that includes sampleID, source, and the common gene columns.
-df_for_pca_norm <- merged_counts_final_fullnorm %>%
-  select(sampleID, source, all_of(common_expr_cols_norm))
+# Define a helper function to patch extra column values from an original dataset
 
-# Convert the gene expression portion to a numeric data frame/matrix
-expr_matrix_norm <- as.data.frame(lapply(df_for_pca_norm %>% select(-sampleID, -source), as.numeric))
-rownames(expr_matrix_norm) <- df_for_pca_norm$sampleID
+patch_extra_columns <- function(original_df, merged_df, extra_cols) {
+  # Use the correct unique identifier "sampleID"
+  sample_ids <- original_df$sampleID
+  idx <- match(sample_ids, merged_df$sampleID)
+  for (col in extra_cols) {
+    if (col %in% colnames(original_df)) {
+      merged_df[idx, col] <- original_df[[col]]
+    }
+  }
+  return(merged_df)
+}
 
-# --- STEP 5: Run PCA on the Normalized Data ---
+# Patch values for extra columns from mas_merged_counts and metabric_counts respectively:
 
-pca_result_norm <- prcomp(expr_matrix_norm, center = TRUE, scale. = TRUE)
+merged_counts_final <- merged_counts_intersect
+merged_counts_final <- patch_extra_columns(mas_merged_counts, merged_counts_final, extra_mas)
+merged_counts_final <- patch_extra_columns(metabric_counts, merged_counts_final, extra_met)
 
-# --- STEP 6: Create a Data Frame for Plotting PCA Results ---
+# ---------- Final Output ----------
+# merged_counts_final now contains:
+#  - All rows (samples) from both mas_merged_counts and metabric_counts.
+#  - The common columns merged from both datasets.
+#  - Extra columns from either dataset added with NA values where a sample didn't have that information.
+# The unique sample identifier is in 'clin_sample_name'.
+# Optionally, you can set row names based on 'clin_sample_name':
 
-pca_df_norm <- data.frame(
-  sampleID = df_for_pca_norm$sampleID,
-  source = df_for_pca_norm$source,
-  PC1 = pca_result_norm$x[, 1],
-  PC2 = pca_result_norm$x[, 2]
+rownames(merged_counts_final) <- merged_counts_final$sampleID
+
+#################################################
+######Merging Alternative Gene name columns######
+#################################################
+
+anyNA(merged_counts_final$PCLAF)
+
+merged_counts_final <- merged_counts_final %>%
+  mutate(
+    DRC3 = coalesce(DRC3, LRRC48),
+    NEMP1 = coalesce(NEMP1, TMEM194A),
+    PCLAF = coalesce(PCLAF, KIAA0101)
+  ) %>%
+  dplyr::select(-LRRC48, -TMEM194A, -KIAA0101)
+
+###########################
+##########Tagging##########
+###########################
+
+# Initialize a new "source" column with NA in the merged_counts_final data frame.
+
+merged_counts_final$source <- NA
+
+# Tag each sample by checking membership in the respective clinical dataset.
+merged_counts_final$source[ merged_counts_final$sampleID %in% GSE25066_primary_clin$sampleID ] <- "GSE25066"
+merged_counts_final$source[ merged_counts_final$sampleID %in% MAINZ_primary_clin$sampleID ]    <- "MAINZ"
+merged_counts_final$source[ merged_counts_final$sampleID %in% STK_primary_clin$sampleID ]      <- "STK"
+merged_counts_final$source[ merged_counts_final$sampleID %in% TRANSBIG_primary_clin$sampleID ] <- "TRANSBIG"
+merged_counts_final$source[ merged_counts_final$sampleID %in% MSK_primary_clin$sampleID ]      <- "MSK"
+merged_counts_final$source[ merged_counts_final$sampleID %in% UPP_primary_clin$sampleID ]      <- "UPP"
+merged_counts_final$source[ merged_counts_final$sampleID %in% VDX_primary_clin$sampleID ]      <- "VDX"
+merged_counts_final$source[ merged_counts_final$sampleID %in% metabric_clin$sampleID ]         <- "metabric"
+
+# Check the assignment:
+
+table(merged_counts_final$source)
+
+##########################
+######Optional Save#######
+##########################
+
+write.table(merged_counts_final, file = "counts_unnorm.tsv", sep = "\t", quote = FALSE, row.names = TRUE)
+
+###########################################
+########Clinical data cleaning#############
+###########################################
+
+# Find all objects in the environment that end with _ER_Positive_clin
+clin_datasets <- ls(pattern = ".*_ER_Positive_clin$")
+
+# Loop over each dataset
+for (dataset in clin_datasets) {
+  # Retrieve the clinical dataset
+  clin_data <- get(dataset)
+  
+  # Generate a new object name by replacing _ER_Positive_clin with _primary_clin
+  new_name <- sub("_ER_Positive_clin$", "_primary_clin", dataset)
+  
+  # Rename the specified columns
+  names(clin_data)[names(clin_data) == "clin_days_to_tumor_recurrence"] <- "dfs"
+  names(clin_data)[names(clin_data) == "clin_recurrence_status"]        <- "dfs_status"
+  names(clin_data)[names(clin_data) == "clin_days_to_death"]              <- "os"
+  names(clin_data)[names(clin_data) == "clin_vital_status"]               <- "os_status"
+  names(clin_data)[names(clin_data) == "clin_dmfs_days"]                  <- "dmfs"
+  names(clin_data)[names(clin_data) == "clin_dmfs_status"]                <- "dmfs_status"
+  names(clin_data)[names(clin_data) == "clin_er"]                <- "ER"
+  names(clin_data)[names(clin_data) == "clin_her2"]                <- "her2"
+  names(clin_data)[names(clin_data) == "clin_age_at_initial_pathologic_diagnosis"]                <- "age"
+  
+  # Select only the renamed columns
+  desired_cols <- c("dfs", "dfs_status", "os", "os_status", "dmfs", "dmfs_status", "ER", "her2", "age", "sampleID")
+  clin_data <- clin_data[, desired_cols, drop = FALSE]
+  
+  # Assign the modified dataset with the new name in the global environment
+  assign(new_name, clin_data)
+}
+
+###############
+
+# Rename the columns in metabric_clin as specified:
+names(metabric_clin)[names(metabric_clin) == "X.Patient.Identifier"]       <- "sampleID"
+names(metabric_clin)[names(metabric_clin) == "Overall.Survival..Months."]    <- "os"
+names(metabric_clin)[names(metabric_clin) == "Overall.Survival.Status"]      <- "os_status"
+names(metabric_clin)[names(metabric_clin) == "Patient.s.Vital.Status"]       <- "vital_status"
+names(metabric_clin)[names(metabric_clin) == "DFS"]                          <- "dfs"
+names(metabric_clin)[names(metabric_clin) == "DFS_event"]                    <- "dfs_status"
+names(metabric_clin)[names(metabric_clin) == "ER.status.measured.by.IHC"]      <- "ER"
+names(metabric_clin)[names(metabric_clin) == "HER2.status.measured.by.SNP6"]    <- "her2"
+names(metabric_clin)[names(metabric_clin) == "Sex"]                          <- "sex"
+names(metabric_clin)[names(metabric_clin) == "Age.at.Diagnosis"]             <- "age"
+
+#################################################
+###########Combine non metabric_clin#############
+#################################################
+
+clin_meta <- bind_rows(
+  GSE25066_primary_clin,
+  MAINZ_primary_clin,
+  STK_primary_clin,
+  TRANSBIG_primary_clin,
+  MSK_primary_clin,
+  UPP_primary_clin,
+  VDX_primary_clin
 )
 
-# Suppose your PCA object is pca_result
-pca_var <- pca_result_norm$sdev^2                 # Variances of the PCs
-pca_var_percent <- round(pca_var / sum(pca_var) * 100, 1)  # Percentage of total variance
-
-ggplot(pca_df_norm, aes(x = PC1, y = PC2, color = source)) +
-  geom_point(alpha = 0.7) +
-  labs(
-    title = "PCA Plot (Normalized Data)",
-    x = paste0("PC1 (", pca_var_percent[1], "%)"),
-    y = paste0("PC2 (", pca_var_percent[2], "%)")
-  ) +
-  theme_bw()
+clin_meta$dfs <- clin_meta$dfs / 30
+clin_meta$dmfs <- clin_meta$dmfs / 30
+clin_meta$os <- clin_meta$os / 30
 
 ################################################
-#############GOI Distribution Plot##############
-################################################
-        
-# Define your genes of interest again (for clarity)
-genes_of_interest <- c("DEPDC1", "DRC3", "GTSE1", "NEMP1",
-                       "PCLAF", "PLK4", "STAT5A", "UBE2C")
+#####full join clin_meta and metabric_clin######
+###############################################
 
-# Subset the columns you want to include in the output
-# (Here, we keep sampleID, source, and the 8 genes.)
-df_to_save <- merged_counts_final_fullnorm %>%
-  dplyr::select(sampleID, source, all_of(genes_of_interest))
+#--- Step 1: Add a source indicator to each data frame
+clin_meta$source <- "clin_meta"
+metabric_clin$source <- "metabric_clin"
 
-df_long_adj <- merged_counts_final_fullnorm %>%
-  dplyr::select(sampleID, source, all_of(genes_of_interest)) %>%
-  pivot_longer(
-    cols = all_of(genes_of_interest),
-    names_to = "Gene",
-    values_to = "Expression"
-  )
+#--- Step 2: Determine the common columns (including the key and source)
+common_cols <- intersect(colnames(clin_meta), colnames(metabric_clin))
+# (Make sure that your key column—for example, "sampleID"—is present in both.)
 
-ggplot(df_long_adj, aes(x = Expression, color = source)) +
-  geom_density(na.rm = TRUE) +
-  facet_wrap(~ Gene, scales = "free") +
-  theme_bw() +
-  labs(
-    title = "Gene Expression Density after Reference-Based Quantile Scaling",
-    x = "Adjusted Expression",
-    y = "Density"
-  )
+#--- Step 3: Merge by taking only the intersection (using rbind)
+merged_clin <- rbind(clin_meta[, common_cols, drop = FALSE],
+                     metabric_clin[, common_cols, drop = FALSE])
 
+#--- Step 4: Identify extra columns in each file
+extra_clin_meta <- setdiff(colnames(clin_meta), common_cols)
+extra_metabric <- setdiff(colnames(metabric_clin), common_cols)
 
-################################################
-##############Optional Save Results#############
-################################################
-        
-write_tsv(merged_counts_final_fullnorm, "quantile_normalized_data.tsv")
+#--- Step 5: Add extra columns from clin_meta
+for (col in extra_clin_meta) {
+  # Create a new column in merged_clin and initialize with NA
+  merged_clin[[col]] <- NA
+  # For rows that came from clin_meta, fill in the values.
+  # We match by the 'source' column.
+  idx <- which(merged_clin$source == "clin_meta")
+  # Use the original order from clin_meta (assuming rbind preserved the order)
+  merged_clin[idx, col] <- clin_meta[[col]]
+}
 
+#--- Step 6: Add extra columns from metabric_clin
+for (col in extra_metabric) {
+  merged_clin[[col]] <- NA
+  idx <- which(merged_clin$source == "metabric_clin")
+  merged_clin[idx, col] <- metabric_clin[[col]]
+}
+
+merged_clin <- merged_clin %>%
+  dplyr::select(sampleID, dfs, dfs_status, os, os_status, everything())
+
+##########################
+#####Optional Save########
+##########################
+
+write_tsv(clin_meta, "clin_meta.tsv")
