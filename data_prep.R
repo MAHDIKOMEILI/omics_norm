@@ -43,14 +43,14 @@ for (file in files) {
     non_clin_cols <- union("clin_sample_name", non_clin_cols)
   }
   
-  rm(dataset,dataset_clin,dataset_counts,metabric_clin,metabric_counts)
-  
   dataset_counts <- dataset[, non_clin_cols, drop = FALSE]
   
   # 6. Assign the subsets to variables named <fileName>_clin and <fileName>_counts
   assign(paste0(var_name, "_clin"), dataset_clin)
   assign(paste0(var_name, "_counts"), dataset_counts)
 }
+
+rm(dataset,dataset_clin,dataset_counts,metabric_clin,metabric_counts)
 
 # Loop over objects in the global environment with names ending in _clin or _counts
 for (obj_name in ls(pattern = "(_clin$|_counts$)")) {
@@ -77,7 +77,6 @@ counts_list <- lapply(counts_list, function(x) {
 
 # Identify common columns (features) across these counts data frames
 common_features <- Reduce(intersect, lapply(counts_list, colnames))
-print(common_features)  # Check which features are common
 
 # Subset each counts data frame to include only the common columns
 counts_list_subset <- lapply(counts_list, function(df) {
@@ -90,10 +89,6 @@ mas_merged_counts <- do.call(rbind, counts_list_subset)
 
 # Set the 'clin_sample_name' column as row names
 rownames(mas_merged_counts) <- mas_merged_counts$sampleID
-
-# (Optional) Verify the row names
-head(rownames(mas_merged_counts))
-
 
 ####################################################
 ###################METABRIC#########################
@@ -130,9 +125,6 @@ if ("X.Patient.Identifier" %in% colnames(metabric_counts)) {
 # Now you have:
 #   - metabric_clin: containing the clinical information columns
 #   - metabric_counts: containing the counts data plus the sampleID column
-
-colnames(metabric_counts)
-
 # Define the names of the columns you want to remove
 remove_cols <- c("Lymph.nodes.examined.positive", "Nottingham.prognostic.index", "Cellularity", "Chemotherapy", "Cohort", "Hormone.Therapy", "Inferred.Menopausal.State", "Integrative.Cluster", "Pam50...Claudin.low.subtype", "X3.Gene.classifier.subtype", "Primary.Tumor.Laterality", "Radio.Therapy", "Tumor.Other.Histologic.Subtype", "Type.of.Breast.Surgery")  # Replace with your actual column names
 
@@ -172,8 +164,6 @@ extra_met <- setdiff(colnames(metabric_counts), common_features_final)
 # The union of extra columns from both datasets
 
 extra_all <- union(extra_mas, extra_met)
-
-"KIAA0101" %in% extra_all
 
 # ---------- Step 3: Patch Extra Columns into the Merged Data ----------
 
@@ -217,35 +207,13 @@ rownames(merged_counts_final) <- merged_counts_final$sampleID
 ######Merging Alternative Gene name columns######
 #################################################
 
- merged_counts_final <- merged_counts_final %>%
+merged_counts_final <- merged_counts_final %>%
   mutate(
     DRC3 = coalesce(DRC3, LRRC48),
     NEMP1 = coalesce(NEMP1, TMEM194A),
     PCLAF = coalesce(PCLAF, KIAA0101)
   ) %>%
   dplyr::select(-LRRC48, -TMEM194A, -KIAA0101)
-
-###########################
-##########Tagging##########
-###########################
-
-# Initialize a new "source" column with NA in the merged_counts_final data frame.
-
-merged_counts_final$source <- NA
-
-# Tag each sample by checking membership in the respective clinical dataset.
-merged_counts_final$source[ merged_counts_final$sampleID %in% GSE25066_primary_clin$sampleID ] <- "GSE25066"
-merged_counts_final$source[ merged_counts_final$sampleID %in% MAINZ_primary_clin$sampleID ]    <- "MAINZ"
-merged_counts_final$source[ merged_counts_final$sampleID %in% STK_primary_clin$sampleID ]      <- "STK"
-merged_counts_final$source[ merged_counts_final$sampleID %in% TRANSBIG_primary_clin$sampleID ] <- "TRANSBIG"
-merged_counts_final$source[ merged_counts_final$sampleID %in% MSK_primary_clin$sampleID ]      <- "MSK"
-merged_counts_final$source[ merged_counts_final$sampleID %in% UPP_primary_clin$sampleID ]      <- "UPP"
-merged_counts_final$source[ merged_counts_final$sampleID %in% VDX_primary_clin$sampleID ]      <- "VDX"
-merged_counts_final$source[ merged_counts_final$sampleID %in% metabric_clin$sampleID ]         <- "metabric"
-
-# Check the assignment:
-
-table(merged_counts_final$source)
 
 ##########################
 ######Optional Save#######
@@ -359,6 +327,28 @@ for (col in extra_metabric) {
 
 merged_clin <- merged_clin %>%
   dplyr::select(sampleID, dfs, dfs_status, os, os_status, everything())
+
+###########################
+##########Tagging##########
+###########################
+
+# Initialize a new "source" column with NA in the merged_counts_final data frame.
+
+merged_counts_final$source <- NA
+
+# Tag each sample by checking membership in the respective clinical dataset.
+merged_counts_final$source[ merged_counts_final$sampleID %in% GSE25066_primary_clin$sampleID ] <- "GSE25066"
+merged_counts_final$source[ merged_counts_final$sampleID %in% MAINZ_primary_clin$sampleID ]    <- "MAINZ"
+merged_counts_final$source[ merged_counts_final$sampleID %in% STK_primary_clin$sampleID ]      <- "STK"
+merged_counts_final$source[ merged_counts_final$sampleID %in% TRANSBIG_primary_clin$sampleID ] <- "TRANSBIG"
+merged_counts_final$source[ merged_counts_final$sampleID %in% MSK_primary_clin$sampleID ]      <- "MSK"
+merged_counts_final$source[ merged_counts_final$sampleID %in% UPP_primary_clin$sampleID ]      <- "UPP"
+merged_counts_final$source[ merged_counts_final$sampleID %in% VDX_primary_clin$sampleID ]      <- "VDX"
+merged_counts_final$source[ merged_counts_final$sampleID %in% metabric_clin$sampleID ]         <- "metabric"
+
+# Check the assignment:
+
+table(merged_counts_final$source)
 
 ##########################
 #####Optional Save########
