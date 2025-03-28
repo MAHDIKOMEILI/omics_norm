@@ -1,13 +1,25 @@
+#######################################
+###########Load Libraries##############
+#######################################
+
 library(dplyr)
 library(ggplot2)
+library(readr)
+###########################################################
+############prepare dataframes for pipeline################
+###########################################################
 
-# Make a copy of merged_counts_final so we don't overwrite it
+# Make a copy of merged_counts_final to prevent overwriting it
 merged_counts_final_fullnorm <- merged_counts_final
 
 non_gene_cols <- c("sampleID", "source")  # plus any other columns you want to exclude
 all_genes <- setdiff(colnames(merged_counts_final_fullnorm), non_gene_cols)
 
 metabric_data <- merged_counts_final_fullnorm[merged_counts_final_fullnorm$source == "metabric", ]
+
+#######################################
+#######Helper function adjust##########
+#######################################
 
 adjust_gene <- function(target_values, ref_values, nquantiles = 10) {
   probs <- seq(0, 1, length.out = nquantiles + 1)
@@ -39,8 +51,16 @@ adjust_gene <- function(target_values, ref_values, nquantiles = 10) {
   return(adjusted)
 }
 
+####################################
+#######Define target datasets#######
+####################################
+
 # Identify the non-reference sources
 non_metabric_sources <- setdiff(unique(merged_counts_final_fullnorm$source), "metabric")
+
+########################################################
+####################Normalisation Loop##################
+########################################################
 
 for (src in non_metabric_sources) {
   cat("Adjusting dataset:", src, "\n")
@@ -67,8 +87,9 @@ for (src in non_metabric_sources) {
     merged_counts_final_fullnorm[target_idx, gene] <- adjusted_vals
   }
 }
-
-##################PCAPLOT unnormalised
+#####################################################
+##################PCAPLOT unnormalised###############
+#####################################################
 
 # --- STEP 1: Define which columns represent gene expression
 # Assume merged_counts_final has columns like sampleID, source, and gene expression columns.
@@ -123,8 +144,11 @@ ggplot(pca_df, aes(x = PC1, y = PC2, color = source)) +
     x = "PC1",
     y = "PC2"
   )
-##############################PCA PLOT normalised###################
-
+                                                            
+############################################################                                                 
+######################PCA PLOT normalised###################
+############################################################
+                                                            
 # --- STEP 1: Identify Gene Columns in Normalized Data ---
 
 # Specify columns that are not gene expression (identifiers, etc.)
@@ -182,16 +206,6 @@ pca_df_norm <- data.frame(
   PC2 = pca_result_norm$x[, 2]
 )
 
-# --- STEP 7: Plot the PCA for Normalized Data ---
-
-ggplot(pca_df_norm, aes(x = PC1, y = PC2, color = source)) +
-  geom_point(alpha = 0.7) +
-  theme_bw() +
-  labs(
-    title = "PCA Plot (Normalized Data)",
-    x = "Principal Component 1",
-    y = "Principal Component 2"
-  )
 # Suppose your PCA object is pca_result
 pca_var <- pca_result_norm$sdev^2                 # Variances of the PCs
 pca_var_percent <- round(pca_var / sum(pca_var) * 100, 1)  # Percentage of total variance
@@ -204,4 +218,42 @@ ggplot(pca_df_norm, aes(x = PC1, y = PC2, color = source)) +
     y = paste0("PC2 (", pca_var_percent[2], "%)")
   ) +
   theme_bw()
+
+################################################
+#############GOI Distribution Plot##############
+################################################
+        
+# Define your genes of interest again (for clarity)
+genes_of_interest <- c("DEPDC1", "DRC3", "GTSE1", "NEMP1",
+                       "PCLAF", "PLK4", "STAT5A", "UBE2C")
+
+# Subset the columns you want to include in the output
+# (Here, we keep sampleID, source, and the 8 genes.)
+df_to_save <- merged_counts_final_adj %>%
+  dplyr::select(sampleID, source, all_of(genes_of_interest))
+
+df_long_adj <- merged_counts_final_adj %>%
+  dplyr::select(sampleID, source, all_of(genes_of_interest)) %>%
+  pivot_longer(
+    cols = all_of(genes_of_interest),
+    names_to = "Gene",
+    values_to = "Expression"
+  )
+
+ggplot(df_long_adj, aes(x = Expression, color = source)) +
+  geom_density(na.rm = TRUE) +
+  facet_wrap(~ Gene, scales = "free") +
+  theme_bw() +
+  labs(
+    title = "Gene Expression Density after Reference-Based Quantile Scaling",
+    x = "Adjusted Expression",
+    y = "Density"
+  )
+
+
+################################################
+##############Optional Save Results#############
+################################################
+        
+write_tsv(df_to_save, "goi_quantile_normalized_data.tsv")
 
