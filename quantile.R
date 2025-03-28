@@ -100,11 +100,11 @@ gene_cols <- setdiff(colnames(merged_counts_final), non_gene_cols)
 # --- STEP 2: Split the data into metabric and non-metabric subsets
 metabric_data <- merged_counts_final %>%
   filter(source == "metabric") %>%
-  select(all_of(gene_cols))
+  dplyr::select(all_of(gene_cols))
 
 non_metabric_data <- merged_counts_final %>%
   filter(source != "metabric") %>%
-  select(all_of(gene_cols))
+  dplyr::select(all_of(gene_cols))
 
 # --- STEP 3: Identify gene columns that have complete (non-NA) data in BOTH groups
 # For metabric samples, get the names of genes with no NA values:
@@ -118,11 +118,11 @@ cat("Number of gene columns common (complete) in both groups:", length(common_ex
 # --- STEP 4: Create a data frame for PCA using the intersection of complete gene columns
 # We keep sampleID and source columns from the original data.
 df_for_pca <- merged_counts_final %>%
-  select(sampleID, source, all_of(common_expr_cols))
+  dplyr::select(sampleID, source, all_of(common_expr_cols))
 
 # --- STEP 5: Convert the expression portion to a numeric matrix
 # We assume that after removing sampleID and source, the rest are expression values.
-expr_matrix <- as.data.frame(lapply(df_for_pca %>% select(-sampleID, -source), as.numeric))
+expr_matrix <- as.data.frame(lapply(df_for_pca %>% dplyr::select(-sampleID, -source), as.numeric))
 rownames(expr_matrix) <- df_for_pca$sampleID
 
 # --- STEP 6: Run PCA on the intersection expression matrix
@@ -145,11 +145,11 @@ ggplot(pca_df, aes(x = PC1, y = PC2, color = source)) +
     x = "PC1",
     y = "PC2"
   )
-                                                            
+
 ############################################################                                                 
 ######################PCA PLOT normalised###################
 ############################################################
-                                                            
+
 # --- STEP 1: Identify Gene Columns in Normalized Data ---
 
 # Specify columns that are not gene expression (identifiers, etc.)
@@ -162,11 +162,11 @@ gene_cols <- setdiff(colnames(merged_counts_final_fullnorm), non_gene_cols)
 
 metabric_data_norm <- merged_counts_final_fullnorm %>%
   filter(source == "metabric") %>%
-  select(all_of(gene_cols))
+  dplyr::select(all_of(gene_cols))
 
 non_metabric_data_norm <- merged_counts_final_fullnorm %>%
   filter(source != "metabric") %>%
-  select(all_of(gene_cols))
+  dplyr::select(all_of(gene_cols))
 
 # --- STEP 3: Find the Intersection of Complete Gene Columns ---
 
@@ -188,10 +188,10 @@ cat("Number of complete gene columns in normalized data:", length(common_expr_co
 
 # Create a data frame for PCA that includes sampleID, source, and the common gene columns.
 df_for_pca_norm <- merged_counts_final_fullnorm %>%
-  select(sampleID, source, all_of(common_expr_cols_norm))
+  dplyr::select(sampleID, source, all_of(common_expr_cols_norm))
 
 # Convert the gene expression portion to a numeric data frame/matrix
-expr_matrix_norm <- as.data.frame(lapply(df_for_pca_norm %>% select(-sampleID, -source), as.numeric))
+expr_matrix_norm <- as.data.frame(lapply(df_for_pca_norm %>% dplyr::select(-sampleID, -source), as.numeric))
 rownames(expr_matrix_norm) <- df_for_pca_norm$sampleID
 
 # --- STEP 5: Run PCA on the Normalized Data ---
@@ -223,7 +223,7 @@ ggplot(pca_df_norm, aes(x = PC1, y = PC2, color = source)) +
 ################################################
 #############GOI Distribution Plot##############
 ################################################
-        
+
 # Define your genes of interest again (for clarity)
 genes_of_interest <- c("DEPDC1", "DRC3", "GTSE1", "NEMP1",
                        "PCLAF", "PLK4", "STAT5A", "UBE2C")
@@ -255,5 +255,5 @@ ggplot(df_long_adj, aes(x = Expression, color = source)) +
 ################################################
 ##############Optional Save Results#############
 ################################################
-        
+
 write_tsv(merged_counts_final_fullnorm, "quantile_normalized_data.tsv")
