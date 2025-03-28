@@ -74,19 +74,20 @@ for (src in non_metabric_sources) {
     # Get reference (metabric) values
     ref_vals <- as.numeric(metabric_data[[gene]])
     
-    # If there are NAs, you may want to impute or skip
+    # If there are NA values in either set, skip normalization for this gene
     if (any(is.na(target_vals)) || any(is.na(ref_vals))) {
-      cat("Warning: Column", gene, "in dataset", src, "contains NA values.\n")
-      # Optionally handle NAs (impute or skip)
+      cat("Warning: Column", gene, "in dataset", src, "contains NA values. Skipping normalization for this gene.\n")
+      next  # Skip to the next gene
     }
     
-    # Adjust the target values
+    # Adjust the target values using the custom quantile normalization function
     adjusted_vals <- adjust_gene(target_vals, ref_vals, nquantiles = 10)
     
-    # Store back in the new object
+    # Store the adjusted values back in the new object
     merged_counts_final_fullnorm[target_idx, gene] <- adjusted_vals
   }
 }
+
 #####################################################
 ##################PCAPLOT unnormalised###############
 #####################################################
