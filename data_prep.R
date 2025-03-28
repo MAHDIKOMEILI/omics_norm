@@ -173,6 +173,8 @@ extra_met <- setdiff(colnames(metabric_counts), common_features_final)
 
 extra_all <- union(extra_mas, extra_met)
 
+"KIAA0101" %in% extra_all
+
 # ---------- Step 3: Patch Extra Columns into the Merged Data ----------
 
 # Add each extra column to the merged_counts_intersect object, initializing with NA
@@ -182,13 +184,12 @@ for (col in extra_all) {
 }
 
 # Define a helper function to patch extra column values from an original dataset
+
 patch_extra_columns <- function(original_df, merged_df, extra_cols) {
-  # We assume both data frames share the unique identifier "clin_sample_name"
-  sample_ids <- original_df$clin_sample_name
-  # Find row indices in merged_df corresponding to these sample IDs
-  idx <- match(sample_ids, merged_df$clin_sample_name)
+  # Use the correct unique identifier "sampleID"
+  sample_ids <- original_df$sampleID
+  idx <- match(sample_ids, merged_df$sampleID)
   for (col in extra_cols) {
-    # Only patch if the column exists in the original dataset
     if (col %in% colnames(original_df)) {
       merged_df[idx, col] <- original_df[[col]]
     }
@@ -211,6 +212,18 @@ merged_counts_final <- patch_extra_columns(metabric_counts, merged_counts_final,
 # Optionally, you can set row names based on 'clin_sample_name':
 
 rownames(merged_counts_final) <- merged_counts_final$sampleID
+
+#################################################
+######Merging Alternative Gene name columns######
+#################################################
+
+ merged_counts_final <- merged_counts_final %>%
+  mutate(
+    DRC3 = coalesce(DRC3, LRRC48),
+    NEMP1 = coalesce(NEMP1, TMEM194A),
+    PCLAF = coalesce(PCLAF, KIAA0101)
+  ) %>%
+  dplyr::select(-LRRC48, -TMEM194A, -KIAA0101)
 
 ###########################
 ##########Tagging##########
